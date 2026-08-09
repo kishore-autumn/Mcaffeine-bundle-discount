@@ -2,14 +2,37 @@ query CartInput {
   cart {
     lines {
       id
+      quantity
       cost {
+        amountPerQuantity {
+          amount
+          currencyCode
+        }
         subtotalAmount {
           amount
+        }
+      }
+      merchandise {
+        ... on ProductVariant {
+          id
+          product {
+            id
+            hasTags(tags: ["exclude_bundle_discount"]) {
+              tag
+              hasTag
+            }
+          }
         }
       }
     }
   }
   discount {
     discountClasses
+    metafield(
+      namespace: "$app:bundle-discount--ui-extension",
+      key: "function-configuration"
+    ) {
+      value
+    }
   }
 }

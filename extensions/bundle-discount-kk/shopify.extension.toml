@@ -1,7 +1,7 @@
 api_version = "2026-04"
 
 [[extensions]]
-name = "t:name"
+name = "bundle-discount-kk"
 handle = "bundle-discount-kk"
 type = "function"
 uid = "3dfbb18a-1173-79a3-9323-f0732c203e51a38bd59a"
@@ -20,3 +20,6 @@ description = "t:description"
   [extensions.build]
   command = ""
   path = "dist/function.wasm"
+
+  [extensions.ui]
+  handle = "bundle-admin-kk"

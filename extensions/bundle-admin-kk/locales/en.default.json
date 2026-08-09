@@ -1,5 +1,5 @@
 {
-  "name": "[Example] Discount UI extension",
+  "name": "Bundle Settings",
   "description": "Discount UI extension",
   "title": "Select which discount types to apply at checkout",
   "loading": "Loading...",

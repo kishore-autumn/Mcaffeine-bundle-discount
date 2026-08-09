@@ -1,131 +1,185 @@
+import { render } from "preact";
+import { useState, useEffect, useMemo } from "preact/hooks";
 
-import "@shopify/ui-extensions/preact";
-import {render} from "preact";
-import {useState, useEffect, useMemo} from "preact/hooks";
+const METAFIELD_NAMESPACE = "$app:bundle-discount--ui-extension";
+const METAFIELD_KEY = "function-configuration";
 
 export default async () => {
+  const existingDefinition = await getMetafieldDefinition();
+  if (!existingDefinition) {
+    const metafieldDefinition = await createMetafieldDefinition();
+    if (!metafieldDefinition) {
+      throw new Error("Failed to create metafield definition");
+    }
+  }
+
   render(<App />, document.body);
 };
 
-function AppliesToCollections({
-  onClickAdd,
-  onClickRemove,
-  value,
-  defaultValue,
-  i18n,
-  appliesTo,
-  onAppliesToChange,
-}) {
-  return (
-    <s-section>
-      <s-box display="none">
-        <s-text-field
-          value={value.map(({id}) => id).join(",")}
-          label=""
-          name="collectionsIds"
-          defaultValue={defaultValue.map(({id}) => id).join(",")}
-        />
-      </s-box>
-      <s-stack gap="base">
-        <s-stack direction="inline" alignItems="end" gap="base">
-          <s-select
-            label={i18n.translate("collections.appliesTo")}
-            name="appliesTo"
-            value={appliesTo}
-            onChange={event =>
-              onAppliesToChange(event.currentTarget.value)
-            }
-          >
-            <s-option value="all">
-              {i18n.translate("collections.allProducts")}
-            </s-option>
-            <s-option value="collections">
-              {i18n.translate("collections.collections")}
-            </s-option>
-          </s-select>
+// ─── Metafield Definition Helpers ─────────────────────────────────────────
 
-          {appliesTo === "all" ? null : (
-            <s-box inlineSize="180px">
-              <s-button onClick={onClickAdd}>
-                {i18n.translate("collections.buttonLabel")}
-              </s-button>
-            </s-box>
-          )}
-        </s-stack>
-        <CollectionsSection collections={value} onClickRemove={onClickRemove} />
+async function getMetafieldDefinition() {
+  const query = `#graphql
+    query GetMetafieldDefinition {
+      metafieldDefinitions(
+        first: 1,
+        ownerType: DISCOUNT,
+        namespace: "${METAFIELD_NAMESPACE}",
+        key: "${METAFIELD_KEY}"
+      ) {
+        nodes {
+          id
+        }
+      }
+    }
+  `;
+
+  const result = await shopify.query(query);
+  // @ts-ignore
+  return result?.data?.metafieldDefinitions?.nodes?.[0];
+}
+
+async function createMetafieldDefinition() {
+  const definition = {
+    access: {
+      admin: "MERCHANT_READ_WRITE",
+    },
+    key: METAFIELD_KEY,
+    name: "Bundle Discount Configuration",
+    namespace: METAFIELD_NAMESPACE,
+    ownerType: "DISCOUNT",
+    type: "json",
+  };
+
+  const query = `#graphql
+    mutation CreateMetafieldDefinition($definition: MetafieldDefinitionInput!) {
+      metafieldDefinitionCreate(definition: $definition) {
+        createdDefinition {
+          id
+        }
+      }
+    }
+  `;
+
+  const result = await shopify.query(query, { variables: { definition } });
+  // @ts-ignore
+  return result?.data?.metafieldDefinitionCreate?.createdDefinition || null;
+}
+
+// ─── Parse Metafield ───────────────────────────────────────────────────────
+
+function parseMetafield(value) {
+  try {
+    const parsed = JSON.parse(value || "{}");
+    return {
+      quantity: parsed.quantity ?? "3",
+      fixedPrice: parsed.fixedPrice ?? "999",
+    };
+  } catch {
+    return {
+      quantity: "3",
+      fixedPrice: "999",
+    };
+  }
+}
+
+// ─── useExtensionData Hook ─────────────────────────────────────────────────
+
+function useExtensionData() {
+  const { applyMetafieldChange, i18n, data } = shopify;
+
+  const metafieldConfig = useMemo(
+    () =>
+      parseMetafield(
+        data?.metafields?.find(
+          (metafield) => metafield.key === METAFIELD_KEY
+        )?.value
+      ),
+    [data?.metafields]
+  );
+
+  const [config, setConfig] = useState(metafieldConfig);
+  const [initialConfig, setInitialConfig] = useState(metafieldConfig);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setConfig(metafieldConfig);
+    setInitialConfig(metafieldConfig);
+  }, [metafieldConfig]);
+
+  const onConfigChange = (key, value) => {
+    setConfig((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
+  };
+
+  async function applyExtensionMetafieldChange() {
+    await applyMetafieldChange({
+      type: "updateMetafield",
+      namespace: METAFIELD_NAMESPACE,
+      key: METAFIELD_KEY,
+      value: JSON.stringify(config),
+      valueType: "json",
+    });
+    setInitialConfig(config);
+  }
+
+  const resetForm = () => {
+    setConfig(initialConfig);
+  };
+
+  return {
+    applyExtensionMetafieldChange,
+    i18n,
+    config,
+    onConfigChange,
+    resetForm,
+    loading,
+  };
+}
+
+// ─── TextField Component ───────────────────────────────────────────────────
+
+function TextField({ label, value, onChange, name, info, defaultValue }) {
+  return (
+    <s-box>
+      <s-stack gap="base">
+        <s-text-field
+          label={label}
+          name={name}
+          value={value}
+          defaultValue={defaultValue}
+          onChange={(event) => onChange(event.currentTarget.value)}
+        />
+        {info && <s-text tone="subdued">{info}</s-text>}
       </s-stack>
-    </s-section>
+    </s-box>
   );
 }
 
-function CollectionsSection({
-  collections,
-  onClickRemove,
-}) {
-  if (collections.length === 0) {
-    return null;
-  }
-
-  return collections.map(collection => (
-    <s-stack
-      direction="inline"
-      alignItems="center"
-      justifyContent="space-between"
-      key={collection.id}
-    >
-      <s-link
-        href={`shopify://admin/collections/${collection.id.split("/").pop()}`}
-        target="_blank"
-      >
-        {collection.title}
-      </s-link>
-      <s-button variant="tertiary" onClick={() => onClickRemove(collection.id)}>
-        <s-icon type="x-circle" />
-      </s-button>
-    </s-stack>
-  ));
-}
+// ─── App ───────────────────────────────────────────────────────────────────
 
 function App() {
   const {
     applyExtensionMetafieldChange,
     i18n,
-    initialPercentages,
-    onPercentageValueChange,
-    percentages,
+    config,
+    onConfigChange,
     resetForm,
-    initialCollections,
-    collections,
-    appliesTo,
-    onAppliesToChange,
-    removeCollection,
-    onSelectedCollections,
     loading,
   } = useExtensionData();
 
-  const [error, setError] = useState();
-
-  const {discounts} = shopify;
-  const discountClassesSignalValue = discounts?.discountClasses?.value ?? [];
-
-  const handleToggleDiscountClass = async (nextValue) => {
-    const nextDiscountClasses = discountClassesSignalValue.includes(
-      nextValue,
-    )
-      ? discountClassesSignalValue.filter((c) => c !== nextValue)
-      : [...discountClassesSignalValue, nextValue];
-
-    const result =
-      await discounts?.updateDiscountClasses?.(nextDiscountClasses);
-
-    if (!result.success) {
-      setError(i18n.translate("error"));
-    }
-
-    if (result.success && error) {
-      setError(undefined);
-    }
-  };
+  // Live preview: 1x, 2x, 3x bundles
+  const previewRows = useMemo(() => {
+    const qty = parseInt(config.quantity, 10);
+    const price = parseFloat(config.fixedPrice);
+    if (isNaN(qty) || isNaN(price) || qty <= 0 || price <= 0) return [];
+    return [1, 2, 3].map((multiplier) => ({
+      items: qty * multiplier,
+      total: `₹${(price * multiplier).toLocaleString("en-IN")}`,
+    }));
+  }, [config.quantity, config.fixedPrice]);
 
   if (loading) {
     return <s-text>{i18n.translate("loading")}</s-text>;
@@ -133,264 +187,65 @@ function App() {
 
   return (
     <s-function-settings
-      onSubmit={event => {
-        event.waitUntil?.(applyExtensionMetafieldChange());
-      }}
+      onSubmit={(event) => event.waitUntil(applyExtensionMetafieldChange())}
       onReset={resetForm}
     >
-      <s-heading>{i18n.translate("title")}</s-heading>
-      <s-section>
-        <s-stack gap="base">
-          {error ? <s-banner tone="critical">{error}</s-banner> : null}
-          <s-stack gap="none">
-            <s-checkbox
-              checked={discountClassesSignalValue.includes("product")}
-              onChange={() => handleToggleDiscountClass("product")}
-              label={i18n.translate("discountClasses.product")}
-              disabled={
-                discountClassesSignalValue.length === 1 &&
-                discountClassesSignalValue.includes("product")
-              }
+      <s-stack gap="base">
+
+        {/* ── Bundle Settings ── */}
+        <s-section>
+          <s-stack gap="base">
+
+            <TextField
+              label="Bundle Quantity"
+              name="quantity"
+              value={String(config.quantity ?? "3")}
+              defaultValue="3"
+              onChange={(value) => onConfigChange("quantity", value)}
+              info="Number of items required to trigger the bundle (e.g. 3 for BUY3)"
             />
 
-            {discountClassesSignalValue.includes("product") ? (
-              <s-stack gap="none">
-                <s-number-field
-                  label={i18n.translate("label")}
-                  name="product"
-                  value={String(percentages.product)}
-                  defaultValue={String(initialPercentages.product)}
-                  min={0}
-                  max={100}
-                  onChange={event =>
-                    onPercentageValueChange(
-                      "product",
-                      event.currentTarget.value,
-                    )
-                  }
-                  suffix="%"
-                />
-                <AppliesToCollections
-                  onClickAdd={onSelectedCollections}
-                  onClickRemove={removeCollection}
-                  value={collections}
-                  defaultValue={initialCollections}
-                  i18n={i18n}
-                  appliesTo={appliesTo}
-                  onAppliesToChange={onAppliesToChange}
-                />
-              </s-stack>
-            ) : null}
-          </s-stack>
-
-          <s-divider />
-
-          <s-stack gap="none">
-            <s-checkbox
-              checked={discountClassesSignalValue.includes("order")}
-              onChange={() => handleToggleDiscountClass("order")}
-              label={i18n.translate("discountClasses.order")}
-              disabled={
-                discountClassesSignalValue.length === 1 &&
-                discountClassesSignalValue.includes("order")
-              }
+            <TextField
+              label="Fixed Bundle Price (₹)"
+              name="fixedPrice"
+              value={String(config.fixedPrice ?? "999")}
+              defaultValue="999"
+              onChange={(value) => onConfigChange("fixedPrice", value)}
+              info="The fixed price for one bundle (e.g. 999 for BUY3@999). Multiples are handled automatically."
             />
 
-            {discountClassesSignalValue.includes("order") ? (
-              <s-number-field
-                label={i18n.translate("label")}
-                name="order"
-                value={String(percentages.order)}
-                defaultValue={String(initialPercentages.order)}
-                min={0}
-                max={100}
-                onChange={event =>
-                  onPercentageValueChange("order", event.currentTarget.value)
-                }
-                suffix="%"
-              />
-            ) : null}
           </s-stack>
+        </s-section>
 
-          <s-divider />
-
-          <s-stack gap="none">
-            <s-checkbox
-              checked={discountClassesSignalValue.includes("shipping")}
-              onChange={() => handleToggleDiscountClass("shipping")}
-              label={i18n.translate("discountClasses.shipping")}
-              disabled={
-                discountClassesSignalValue.length === 1 &&
-                discountClassesSignalValue.includes("shipping")
-              }
-            />
-
-            {discountClassesSignalValue.includes("shipping") ? (
-              <s-number-field
-                label={i18n.translate("label")}
-                name="shipping"
-                value={String(percentages.shipping)}
-                defaultValue={String(initialPercentages.shipping)}
-                min={0}
-                max={100}
-                onChange={event =>
-                  onPercentageValueChange("shipping", event.currentTarget.value)
-                }
-                suffix="%"
-              />
-            ) : null}
+        {/* ── Excluded Products Info ── */}
+        <s-section>
+          <s-text>Excluded Products</s-text>
+          <s-stack gap="base">
+            <s-text tone="subdued">
+              Products tagged with "exclude_bundle_discount" will be excluded
+              from the bundle discount and charged at full price.
+            </s-text>
           </s-stack>
-        </s-stack>
-      </s-section>
+        </s-section>
+
+        {/* ── Price Preview ── */}
+        {previewRows.length > 0 && (
+          <s-section>
+            <s-text>Price Preview</s-text>
+            <s-stack gap="base">
+              {previewRows.map((row) => (
+                <s-box key={row.items}>
+                  <s-inline spacing="base">
+                    <s-text>{row.items} items</s-text>
+                    <s-text>→ Customer pays {row.total}</s-text>
+                  </s-inline>
+                </s-box>
+              ))}
+            </s-stack>
+          </s-section>
+        )}
+
+      </s-stack>
     </s-function-settings>
   );
 }
-
-function useExtensionData() {
-  const {applyMetafieldChange, i18n, data, resourcePicker, query} = shopify;
-
-  const metafieldConfig = useMemo(
-    () =>
-      parseMetafield(
-        data?.metafields?.find(
-          metafield => metafield.key === "function-configuration",
-        )?.value,
-      ),
-    [data?.metafields],
-  );
-
-  const [percentages, setPercentages] = useState(metafieldConfig.percentages);
-  const [initialCollections, setInitialCollections] = useState(
-    [],
-  );
-  const [collections, setCollections] = useState([]);
-  const [appliesTo, setAppliesTo] = useState("all");
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    const fetchCollections = async () => {
-      setLoading(true);
-      const selectedCollections = await getCollections(
-        metafieldConfig.collectionIds,
-        query,
-      );
-      setInitialCollections(selectedCollections);
-      setCollections(selectedCollections);
-      setLoading(false);
-      setAppliesTo(selectedCollections.length > 0 ? "collections" : "all");
-    };
-    fetchCollections();
-  }, [metafieldConfig.collectionIds, query]);
-
-  const onPercentageValueChange = async (type, value) => {
-    setPercentages(prev => ({
-      ...prev,
-      [type]: Number(value),
-    }));
-  };
-
-  const onAppliesToChange = (value) => {
-    setAppliesTo(value);
-    if (value === "all") {
-      setCollections([]);
-    }
-  };
-
-  async function applyExtensionMetafieldChange() {
-    await applyMetafieldChange({
-      type: "updateMetafield",
-      namespace: "$app",
-      key: "function-configuration",
-      value: JSON.stringify({
-        cartLinePercentage: percentages.product,
-        orderPercentage: percentages.order,
-        deliveryPercentage: percentages.shipping,
-        collectionIds: collections.map(({id}) => id),
-      }),
-      valueType: "json",
-    });
-    setInitialCollections(collections);
-  }
-
-  const resetForm = () => {
-    setPercentages(metafieldConfig.percentages);
-    setCollections(initialCollections);
-    setAppliesTo(initialCollections.length > 0 ? "collections" : "all");
-  };
-
-  const onSelectedCollections = async () => {
-    const selection = await resourcePicker({
-      type: "collection",
-      selectionIds: collections.map(({id}) => ({id})),
-      action: "select",
-      multiple: true,
-      filter: {
-        archived: true,
-        variants: true,
-      },
-    });
-    setCollections(selection ?? []);
-  };
-
-  const removeCollection = (id) => {
-    setCollections(prev => prev.filter(collection => collection.id !== id));
-  };
-
-  return {
-    applyExtensionMetafieldChange,
-    i18n,
-    initialPercentages: metafieldConfig.percentages,
-    onPercentageValueChange,
-    percentages,
-    resetForm,
-    collections,
-    initialCollections,
-    removeCollection,
-    onSelectedCollections,
-    loading,
-    appliesTo,
-    onAppliesToChange,
-  };
-}
-
-function parseMetafield(value) {
-  try {
-    const parsed = JSON.parse(value || "{}");
-    return {
-      percentages: {
-        product: Number(parsed.cartLinePercentage ?? 0),
-        order: Number(parsed.orderPercentage ?? 0),
-        shipping: Number(parsed.deliveryPercentage ?? 0),
-      },
-      collectionIds: parsed.collectionIds ?? [],
-    };
-  } catch {
-    return {
-      percentages: {product: 0, order: 0, shipping: 0},
-      collectionIds: [],
-    };
-  }
-}
-
-async function getCollections(
-  collectionGids,
-  adminApiQuery,
-) {
-  const query = `#graphql
-    query GetCollections($ids: [ID!]!) {
-      collections: nodes(ids: $ids) {
-        ... on Collection {
-          id
-          title
-        }
-      }
-    }
-  `;
-  const result = await adminApiQuery(
-    query,
-    {variables: {ids: collectionGids}},
-  );
-  return result?.data?.collections ?? [];
-}
-
-
