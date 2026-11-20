@@ -1,4 +1,7 @@
-query CartInput {
+query CartInput(
+  $includedCollectionIds: [ID!] = [],
+  $excludedCollectionIds: [ID!] = []
+) {
   cart {
     lines {
       id
@@ -12,11 +15,25 @@ query CartInput {
           amount
         }
       }
+      excludeBundle: attribute(key: "_exclude_bundle") {
+        value
+      }
+      sourceCollectionId: attribute(key: "_source_collection_id") {
+        value
+      }
+      sourceCollectionHandle: attribute(key: "_source") {
+        value
+      }
+      sourcePage: attribute(key: "_source_page") {
+        value
+      }
       merchandise {
         ... on ProductVariant {
           id
           product {
             id
+            inIncludedCollection: inAnyCollection(ids: $includedCollectionIds)
+            inExcludedCollection: inAnyCollection(ids: $excludedCollectionIds)
             hasTags(tags: ["exclude_bundle_discount"]) {
               tag
               hasTag
